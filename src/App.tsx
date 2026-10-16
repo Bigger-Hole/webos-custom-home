@@ -5,11 +5,14 @@ import Ambient from './components/Ambient';
 import Home from './screens/Home';
 import AltScreen from './screens/AltScreen';
 import {useRemoteNav} from './hooks/useRemoteNav';
+import {useLibrary} from './hooks/useLibrary';
 import {DIRECTION_TO_SCREEN, SCREENS, worldForScreen, type Direction, type ScreenDef, type ScreenId} from './lib/screens';
 import type {AppItem} from './lib/apps';
 import {buildLists, saveOrders, loadHidden, saveHidden, type CatId} from './lib/order';
 import {ConfigContext, loadConfig, saveConfig, type HomeConfig} from './lib/config';
-import {launchApp, listLaunchPoints, blockScreenSaver, assertSoundOutput, guardSoundOutput, isWebOS} from './service/luna';
+import {reconcileSelection} from './lib/discovery';
+import {launchApp, blockScreenSaver, assertSoundOutput, guardSoundOutput, isWebOS} from './service/luna';
+import {uninstallApp} from './service/manage';
 
 const IDLE_MS = 60_000;      // no input for this long → ambient clock
 const JITTER_MS = 150_000;   // OLED guard: shift the whole UI ±2px this often
@@ -26,10 +29,11 @@ function Panel ({def, children}: {def?: ScreenDef; children: ReactNode}) {
 export default function App () {
 	const [screen, setScreen] = useState<ScreenId>('home');
 	const [selected, setSelected] = useState(0);
-	const [discovered, setDiscovered] = useState<AppItem[]>([]);
+	const library = useLibrary();
+	const discovered = useMemo(() => [...(library.snapshot.apps || []), ...(library.snapshot.inputs || [])], [library.snapshot]);
 	const [hidden, setHidden] = useState<Set<string>>(loadHidden);
 	// full per-category lists (hidden included); the visible slices drive the UI
-	const [lists, setLists] = useState<Record<CatId, AppItem[]>>(() => buildLists());
+	const [lists, setLists] = useState<Record<CatId, AppItem[]>>(() => buildLists(discovered));
 	const [moving, setMoving] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [ambient, setAmbient] = useState(false);
@@ -55,27 +59,16 @@ export default function App () {
 		toastTimer.current = window.setTimeout(() => setToast(null), 2600);
 	}, []);
 
-	// Real app list (#3 of the old worklist): merge the TV's actual launch points
-	// into the catalog — anything new lands in Misc (monogram art; WAM blocks
-	// cross-app icon paths). Runs once; harmless no-op off-webOS.
+	// Defer incoming scans while a tile is held; never overwrite an unsaved move.
+	// Keep focus by ID so adding/removing an earlier tile does not change the target.
 	useEffect(() => {
-		if (!isWebOS()) return;
-		listLaunchPoints()
-			.then((res) => {
-				const known = new Set<string>();
-				for (const cat of ['game', 'stream', 'media', 'misc'] as CatId[]) {
-					for (const a of buildLists()[cat]) known.add(a.id);
-				}
-				const extra: AppItem[] = (res.launchPoints || [])
-					.filter((lp) => !known.has(lp.id))
-					.map((lp) => ({id: lp.id, title: lp.title, color: '#8ea2ff'}));
-				if (extra.length) {
-					setDiscovered(extra);
-					setLists(buildLists(extra));
-				}
-			})
-			.catch(() => { /* catalog-only is fine */ });
-	}, []);
+		if (moving) return;
+		const next = buildLists(discovered);
+		if (screen !== 'home') {
+			setSelected(reconcileSelection(visible[screen], next[screen].filter(a => !hidden.has(a.id)), selected, SCREENS[screen].nearEnd));
+		}
+		setLists(next);
+	}, [discovered, moving, hidden]); // Screen/selection changes alone must not reload the saved order.
 
 	// Keep the TV's own screensaver away — the ambient clock replaces it.
 	useEffect(() => blockScreenSaver(), []);
@@ -131,7 +124,7 @@ export default function App () {
 	useEffect(() => {
 		setMoving(false);
 		if (screen === 'home') { setSelected(0); return; }
-		setSelected(SCREENS[screen].nearEnd ? visible[screen].length - 1 : 0);
+		setSelected(SCREENS[screen].nearEnd ? Math.max(0, visible[screen].length - 1) : 0);
 	}, [screen]);   // eslint-disable-line react-hooks/exhaustive-deps
 
 	const itemCount = screen === 'home' ? 0 : visible[screen].length;
@@ -161,10 +154,10 @@ export default function App () {
 
 	// --- Reorder (move) mode -------------------------------------------------
 	const onMoveStart = useCallback(() => {
-		if (screen === 'home') return;
+		if (screen === 'home' || !visible[screen][selected]) return;
 		moveSnapshot.current = lists;
 		setMoving(true);
-	}, [screen, lists]);
+	}, [screen, lists, visible, selected]);
 
 	const onMoveStep = useCallback((delta: -1 | 1) => {
 		if (screen === 'home') return;
@@ -188,6 +181,11 @@ export default function App () {
 		if (target === screen) return;
 		const app = visible[screen][selected];
 		if (!app) return;
+		if (app.launchType === 'input' || target === 'game') {
+			showToast('Display Inputs is reserved for HDMI ports');
+			return;
+		}
+		if (app.launchType === 'internal') { showToast('Settings stays in Misc'); return; }
 		setLists((prev) => {
 			const from = prev[screen as CatId].filter((x) => x.id !== app.id);
 			const to = [...prev[target], app];
@@ -223,8 +221,23 @@ export default function App () {
 
 	// --- Settings ------------------------------------------------------------
 	const onConfigChange = useCallback((c: HomeConfig) => { setConfig(c); saveConfig(c); }, []);
-	const onOrderReset = useCallback(() => setLists(buildLists(discovered)), [discovered]);
+	const onOrderReset = useCallback(() => {
+		const next = buildLists(discovered);
+		if (screen !== 'home') setSelected(reconcileSelection(visible[screen], next[screen].filter(a => !hidden.has(a.id)), selected, SCREENS[screen].nearEnd));
+		setLists(next);
+	}, [discovered, screen, visible, hidden, selected]);
+	const onRescan = useCallback(async () => {
+		showToast('Scanning apps and inputs…');
+		const ok = await library.rescan();
+		showToast(ok ? 'Apps and inputs updated' : 'Some scans failed — saved results kept');
+	}, [library.rescan, showToast]);
 	const closeSettings = useCallback(() => setSettingsOpen(false), []);
+	const onUninstall = useCallback(async (app: AppItem) => {
+		await uninstallApp(app);
+		await library.forgetApp(app.id);
+		showToast(`${app.title} uninstalled`);
+		void library.rescan();
+	}, [library.forgetApp, library.rescan, showToast]);
 	const onToggleHide = useCallback((id: string) => {
 		setHidden((prev) => {
 			const next = new Set(prev);
@@ -236,6 +249,7 @@ export default function App () {
 
 	useRemoteNav({
 		screen, setScreen, selected, setSelected, itemCount, onLaunch,
+		selectedId: screen === 'home' ? null : visible[screen][selected]?.id ?? null,
 		moving, onMoveStart, onMoveStep, onMoveCross, onMoveCommit, onMoveCancel,
 		enabled: !settingsOpen && !ambient
 	});
@@ -270,6 +284,9 @@ export default function App () {
 								active={def.id === screen}
 								moving={moving && def.id === screen}
 								launchingId={def.id === screen ? launchFx : null}
+								emptyMessage={def.id === 'game'
+									? (library.scanning.inputs ? 'Scanning display inputs…' : 'No inputs found. Try Rescan in Settings.')
+									: (library.scanning.apps ? 'Scanning installed apps…' : 'No apps here. Try Rescan or Manage apps in Settings.')}
 							/>
 						</Panel>
 					))}
@@ -281,6 +298,8 @@ export default function App () {
 					<Settings
 						config={config} onChange={onConfigChange} onClose={closeSettings}
 						onOrderReset={onOrderReset}
+						onRescan={onRescan} scanning={library.scanning} scanErrors={library.errors}
+						onUninstall={onUninstall}
 						lists={lists} hidden={hidden} onToggleHide={onToggleHide}
 					/>
 				)}

@@ -1,253 +1,143 @@
 # Custom webOS Home
 
-A replacement home screen for LG webOS TVs — no ads, no recommendation rows, no
-carousel of things you'll never watch. Just your apps, a clock, and the weather,
-on an OLED-friendly near-black background.
+An adaptive home screen for rooted LG webOS TVs: installed apps, HDMI inputs,
+a clock and weather, with remote control navigation.
 
-It runs as a sideloaded web app and (optionally) takes over the **Home button** and
-**boot** so the TV comes up straight into it. Everything lives inside the app
-package: it bind-mounts nothing, edits no OS files, and a plain uninstall reverts
-the TV completely.
+This is [Bigger-Hole’s fork](https://github.com/Bigger-Hole/webos-custom-home) of
+[zzeppieri/webos-custom-home](https://github.com/zzeppieri/webos-custom-home).
+The original author’s MIT licence and attribution are retained.
 
-![Custom webOS Home — greeting and clock over an animated constellation field, with a weather widget](docs/main-page.png)
+## What’s new in 0.5.1
 
-<p align="center">
-  <img src="docs/home-animation.gif" width="49%" alt="Animated constellation background on the home screen">
-  <img src="docs/navigation.gif" width="49%" alt="Navigating between screens with the remote">
-</p>
+- **Streaming, Media and Misc** are populated from installed, launchable apps.
+  Known apps are classified locally; unfamiliar apps start in Misc.
+- **Stremio** is recognised automatically and starts first in Streaming on a
+  fresh layout, provided it is installed (`io.strem.tv`). Rakuten TV is also
+  recognised as Streaming. Saved manual placements take priority.
+- **Display Inputs** replaces Gaming. All reported HDMI ports remain listed,
+  including unused ports, with the TV’s labels, connection and signal status.
+  The launcher does not guess which console is connected.
+- Manual categories, ordering and hidden apps survive rescans. Removed apps
+  disappear; remembered preferences can be restored when they are reinstalled.
+- **Manage apps** offers a confirmed Uninstall action for removable apps, using
+  Homebrew Channel. System apps, inputs and the launcher are protected.
+- A foreground watcher returns to Custom Home when exiting another app leaves
+  LG Home on screen, while preserving the app’s own Back navigation.
 
-> Built and proven on an **LG OLED, webOS 24 (Rockhopper 9.2.1), Chromium 108**.
-> Other rooted webOS 9/10 models should work; the Home-button key code may differ
-> (see [Troubleshooting](#troubleshooting)).
+The directional hub, animated background, location/weather settings, ambient
+clock and Home-button/boot integration come from the upstream project.
 
----
+![Custom Home clock and animated background — upstream screenshot](docs/main-page.png)
 
-## What you get
+The screenshot shows the upstream clock screen. Its older menu screenshots do
+not show this fork’s adaptive menus.
 
-- **Directional hub** — a center clock with four directions: **Up = Games**
-  (HDMI inputs), **Down = Streaming**, **Left = Media**, **Right = Misc/Tools**.
-- **Real launches** — tiles launch the TV's actually-installed apps and switch
-  HDMI inputs via LunaService (`applicationManager/launch`).
-- **Widgets** — analog + digital clock, date, and current temperature/conditions
-  from [Open-Meteo](https://open-meteo.com/) (no API key). Set your city in
-  **Settings → Location** (city search, saved on-device) — no rebuild needed.
-- **Ambient mode** — after 60s idle it fades to a screensaver-style clock; the
-  TV's own screensaver is vetoed so this replaces it.
-- **eARC audio guard** — keeps audio on your configured output (e.g. an eARC/ARC
-  receiver), which a bare app launch or a cold power-cycle can otherwise drop to
-  the TV speakers. It *subscribes* to the live sound output and re-asserts the
-  moment it drifts, and keeps retrying through the cold-boot window while the
-  receiver's eARC link is still coming up. See
-  [`src/service/luna.ts`](src/service/luna.ts).
-- **Home button + autostart** — an in-package LunaService watches the remote's
-  HOME key and relaunches the app; a webosbrew init.d hook boots into it. See
-  [How the Home takeover works](#how-the-home-takeover-works).
-- **Reorder & hide apps** in a built-in Settings overlay; layout persists.
+## Remote controls
 
-## Screens
+| Control | Action |
+|---|---|
+| Home | Open Custom Home when the bundled watcher is enabled |
+| Up / Down / Left / Right from the clock | Display Inputs / Streaming / Media / Misc |
+| Short OK on a tile | Launch the app or select the input |
+| Hold OK | Reorder the selected tile; arrows move it, OK saves, Back cancels |
+| Left / Right while moving in Streaming | Move the app to Media / Misc |
+| Down while moving in Media or Misc | Move the app to Streaming |
 
-Navigate with the four directions on the remote; a short **OK** launches, a long
-**OK** enters reorder mode.
+Settings stays in Misc and cannot be hidden. **Settings → Manage apps** controls
+visibility; for a removable app, Right selects Uninstall and OK opens a
+confirmation with Cancel selected. Uninstalling can remove that app’s own data.
+HDMI ports remain in Display Inputs.
 
-| Up — Gaming (HDMI inputs) | Down — Streaming |
-|:---:|:---:|
-| ![Gaming screen with PS5 and Switch inputs](docs/gaming.png) | ![Streaming screen with app list](docs/streaming.png) |
-| **Left — Media** | **Right — Misc → Settings** |
-| ![Media screen with a horizontal app row](docs/media.png) | ![In-app settings overlay](docs/settings.png) |
+Discovery runs at startup, on return to the launcher, every minute for apps and
+every ten seconds for inputs while visible. **Settings → Rescan apps and inputs**
+refreshes both immediately. Failed scans retain cached menus; cached input status
+is marked unavailable until refreshed.
 
-Hold **OK** on any tile to reorder it (arrows move it, cross-axis presses send it
-to another category):
+## Install and build
 
-![Reorder mode — moving a tile with a dashed outline and a hint bar](docs/reorder.png)
+This fork currently publishes **source code**. Follow the
+[installation guide](docs/INSTALL.md) to build both the app and its service, install
+on a rooted TV, and enable Home/boot integration.
 
-## Tech stack
+**The inherited one-click installers download upstream v0.4.2. They do not install
+this fork.** The files in `installer/` and the original
+[tutorial](docs/TUTORIAL.md) are retained as upstream references.
 
-Vite + React + TypeScript + Tailwind v4 + Framer Motion, packaged with the
-webOS `ares` CLI.
+With Node.js **22.18 or newer**:
 
-> **Critical build detail:** this TV is **Chromium 108**, below Tailwind v4's
-> native baseline (Chrome 111, which needs `oklch()` and `color-mix()`).
-> [`vite.config.ts`](vite.config.ts) runs **Lightning CSS** as the transformer
-> targeting `chrome >= 108`, which downlevels `oklch()`→hex and
-> `color-mix()`→`rgba()`. **Do not remove this** or colors break on the panel.
-
----
-
-## Quick install (one-click)
-
-Don't want to build anything? If your TV is already
-[rooted](https://github.com/webosbrew/webos-homebrew-channel) with SSH enabled,
-grab the launcher for your OS from the
-[**latest release**](https://github.com/zzeppieri/webos-custom-home/releases/latest)
-and run it — it asks for your TV's IP and does the rest --install + boot autostart
-+ HOME-button takeover-- over SSH. No Node, no `ares` CLI, no building.
-
-| Your computer | File | How to run |
-|---|---|---|
-| **Windows 10/11** | `install.bat` | Double-click |
-| **macOS** | `install.command` | Double-click (right-click → Open the first time) |
-| **Linux / WSL / Git Bash** | `install.command` | `bash install.command` |
-
-Or, from any terminal, the same thing as a one-liner:
-
-```bash
-ssh root@<TV_IP> "curl -fsSL https://github.com/zzeppieri/webos-custom-home/releases/download/v0.4.2/tv-install.sh | sh"
-```
-
-See [`installer/`](installer/) for details and the uninstaller. Prefer the
-classic `ares` sideload? `ares-install --device tv <the .ipk from the release>`.
-
-> **eARC receiver losing audio on power-on?** Some LG TVs bring an eARC/ARC AV
-> receiver up *desynced* after a cold boot or standby-wake — the TV shows the
-> receiver as the sound output but nothing comes through, and you have to toggle
-> eARC off/on by hand each time. The **eARC edition** fixes this automatically: its
-> bundled service re-handshakes the eARC link ~10s after every boot and wake. It
-> elevates the service (via the Homebrew Channel's own `elevate-service`) and causes
-> a brief (~2s) audio blip on each power-on, so it's a **separate opt-in download** —
-> use it only if you have this exact problem:
->
-> ```bash
-> ssh root@<TV_IP> "curl -fsSL https://github.com/zzeppieri/webos-custom-home/releases/download/v0.4.2/tv-install-earc.sh | sh"
-> ```
->
-> Everyone else should use the standard install above (it never touches eARC).
-
-The prebuilt app starts on a placeholder location — **set your own city right in
-the app** (Settings → Location → search), no rebuild needed. The default app
-list is baked in; to change which apps appear, edit
-[`src/lib/apps.ts`](src/lib/apps.ts) and build from source (below).
-
----
-
-## Prerequisites
-
-1. **A rooted / dev-mode LG webOS TV.** Root via the
-   [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel) is
-   recommended (needed for boot autostart). Plain LG Developer Mode works for
-   sideloading and running, but **not** for boot persistence — see
-   [`docs/TUTORIAL.md`](docs/TUTORIAL.md).
-2. **Node.js 18+** on your computer.
-3. **The webOS CLI:** `npm i -g @webos-tools/cli` (provides `ares-*`).
-4. **An ares device profile** pointing at your TV — see below.
-
-## Setup
-
-```bash
-git clone https://github.com/zzeppieri/webos-custom-home.git
+```sh
+gh repo clone Bigger-Hole/webos-custom-home
 cd webos-custom-home
-npm install
-```
-
-### Point ares at your TV
-
-Register your TV once (root SSH key or dev-mode passphrase):
-
-```bash
-ares-setup-device        # interactive: add a device named e.g. "tv" @ your TV's IP
-ares-setup-device --list # confirm it's there
-```
-
-The deploy script assumes the profile is called **`tv`** and reads the TV's IP
-for the post-install autostart step. Override either without editing code:
-
-```bash
-TV_DEVICE=mytv TV_IP=192.168.1.50 npm run deploy
-```
-
-### Configure what shows up
-
-| What | Where |
-|------|-------|
-| App tiles, categories, brand colors | [`src/lib/apps.ts`](src/lib/apps.ts) |
-| Weather location (lat/lon) | [`src/service/weather.ts`](src/service/weather.ts) |
-| App icons (bundled `.png`) | [`public/icons/`](public/icons/) |
-| HOME remote key code | `HOME_CODE` in [`service/service.js`](service/service.js) |
-
-> App IDs must match apps **actually installed on your TV**. List them with
-> `ares-launch --device tv --listApp`, or let the app merge your real launch
-> points at runtime (it calls `listLaunchPoints` and adds unknown apps to Misc).
-
----
-
-## Develop
-
-```bash
-npm run dev      # design in a desktop browser (luna calls no-op off-TV)
-```
-
-## Deploy to the TV
-
-```bash
-npm run deploy   # build → package → install → launch + re-arm Home watcher
-```
-
-`npm run deploy` ([`scripts/deploy.mjs`](scripts/deploy.mjs)) does the whole
-loop. It packages the web app (`dist/`) **and** the service together with
-`ares-package --no-minify` (ares' legacy minifier chokes on Vite's modern output;
-Vite already minifies), installs, then runs the service's `autostart.sh` over SSH
-— because `ares-install` kills the running service, and without re-arming it the
-Home button stays dead until the next reboot.
-
-Manual equivalent:
-
-```bash
+npm ci
+npm test
+npm run typecheck
 npm run build
-ares-package dist service -o . --no-minify
-ares-install --device tv tld.my.customhome_*.ipk
-ares-launch  --device tv tld.my.customhome
+npx --package @webos-tools/cli ares-package dist service -o . --no-minify
 ```
 
----
+Packaging only `dist` omits the bundled discovery service and watcher. The TV
+service itself uses Node.js 16-compatible APIs. `npm run dev` previews the UI on
+a computer, but installed-app discovery and TV launches require webOS; no installed
+apps are invented for the desktop preview.
 
-## How the Home takeover works
+## Compatibility and limitations
 
-Making a sideloaded app the *real* Home on webOS is normally impossible — Home is
-a signed, read-only Flutter app. This project sidesteps that without touching any
-OS files:
+Tested on an **LG OLED55C46LA (C4), webOS SDK 9.2.4**, with TV Node.js 16.19.1.
+Other models/firmware remain unverified. The Home key code is currently `773`;
+remotes with a different code need a service configuration change.
 
-- **A registered in-package LunaService** ([`service/service.js`](service/service.js)).
-  Registration is what grants it permission to call `applicationManager/launch`
-  (a bare script can't). It:
-  - `--boot`: on cold boot, launches the app, retrying until the app manager is
-    ready.
-  - `--watch`: does a **non-blocking poll** of every `/dev/input/event*` device
-    and relaunches the app when it sees the HOME key (code `773` on this remote).
-    (Non-blocking is essential — blocking reads across ~32 input nodes exhaust
-    libuv's 4-thread pool and starve the device that actually carries HOME.)
-  - A 1s heartbeat detects **wake-from-standby** (a big wall-clock gap) and
-    relaunches, since init.d autostart only fires on cold boot.
-- **A webosbrew init.d hook** ([`service/autostart.sh`](service/autostart.sh)),
-  symlinked into `/var/lib/webosbrew/init.d/`, starts that service at boot.
+App-exit redirects and two short standby/wake cycles were checked on that C4,
+including wake after opening Stremio without pressing Home. Longer standby and
+other firmware still need testing. Input labels and connection reporting depend
+on the TV; sleeping devices may appear disconnected. Partial/failed scans preserve
+known ports and label uncertain status explicitly.
 
-Uninstalling the app (and removing the init.d symlink) restores stock behavior.
-Nothing here is destructive.
+**Known unresolved issue:** web apps were reported to lose sign-ins during earlier
+package-based development updates, while Prime Video kept its session. The cause
+is unconfirmed. The later development update copied only launcher files, but
+session preservation still needs further verification. Discovery contains no
+cookie/storage-clearing calls. Avoid repeatedly reinstalling packages as a routine
+development refresh; see the installation guide.
 
-## Troubleshooting
+## Privacy and implementation
 
-- **Home button does nothing / app doesn't relaunch** — your remote's HOME key
-  code may differ from `773`. SSH in, run `cat /dev/input/event*` (or the
-  project's capture approach), press HOME, and read the code; set `HOME_CODE` in
-  [`service/service.js`](service/service.js).
-- **Colors look washed out / wrong** — the Lightning CSS downlevel isn't running.
-  Confirm [`vite.config.ts`](vite.config.ts) targets `chrome >= 108` and rebuild.
-- **"Failed to minify code" when packaging** — you dropped `--no-minify`. Keep it.
-- **Home dies after every deploy** — the install killed the service and it wasn't
-  re-armed. `npm run deploy` handles this; if deploying manually, re-run
-  `autostart.sh` on the TV afterward.
-- **App won't launch a tile** — that app ID isn't installed on your TV. Check
-  `ares-launch --device tv --listApp`.
+App/input discovery stays on the TV. A bundled rooted service queries LG’s APIs
+and returns metadata and bounded raster icons. It adds no analytics or external
+app catalogue. The inherited weather widget uses Open-Meteo; streaming apps retain
+their own network behaviour.
 
-## Credits
+The service reads input events without grabbing them and observes the foreground
+app. It does not modify read-only OS files. The optional upstream eARC edition is
+not enabled in this standard build; existing frontend audio-output behaviour is
+retained. See [discovery architecture and limits](docs/DISCOVERY.md),
+[the TV testing checklist](docs/TESTING.md), and [the changelog](CHANGELOG.md).
 
-- The animated constellation background is a from-scratch Canvas-2D rewrite
-  inspired by the *"Calm Space | Constellations | Minimalism"* Wallpaper Engine
-  scene by **Volpots** (Steam Workshop item `3323607194`). No original assets are
-  used — the look is reimplemented in code.
-- Weather data from [Open-Meteo](https://open-meteo.com/).
-- Built on the [webOS Homebrew](https://www.webosbrew.org/) project's tooling.
+Vite, React, TypeScript, Tailwind and Framer Motion build the frontend. Keep the
+Lightning CSS Chromium 108 target in `vite.config.ts`: it downlevels newer colour
+syntax for the tested TV browser.
 
-## License
+## Contributing
 
-[MIT](LICENSE). Bundled third-party app icons under `public/icons/` are the
-property of their respective owners and are included only for interoperability;
-replace them with your own if you prefer.
+Report your TV model, firmware/webOS version, launcher version, reproduction
+steps and expected/actual result. Include relevant launcher errors after removing
+personal details. For category additions, supply the exact installed app ID and
+title; `src/lib/apps.ts` and `src/lib/discovery.ts` hold local hints. Inventory is
+authoritative: hints must not create tiles for apps that are not installed.
+
+Run `npm test`, `npm run typecheck` and `npm run build` before submitting changes.
+The tests cover discovery, cache/preferences, icon boundaries, app removal,
+foreground redirects and remote gestures during refreshes. Hardware acceptance
+checks are documented separately.
+
+## Credits and licence
+
+- Original launcher: [zzeppieri/webos-custom-home](https://github.com/zzeppieri/webos-custom-home).
+- The upstream constellation background is a Canvas 2D reimplementation inspired
+  by Volpots’ “Calm Space | Constellations | Minimalism” Wallpaper Engine scene
+  (Steam Workshop item `3323607194`); no original scene assets are used.
+- Weather: [Open-Meteo](https://open-meteo.com/).
+- Rooted webOS tooling: [webOS Homebrew](https://www.webosbrew.org/).
+
+[MIT](LICENSE). Third-party app names and icons belong to their respective owners
+and are included for interoperability. This fork is not affiliated with LG,
+Stremio or the other app providers.

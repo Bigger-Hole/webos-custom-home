@@ -29,10 +29,10 @@ export interface ScreenDef {
 	anchor: number;
 }
 
-// Locked mapping: Up=Game, Down=Stream, Left=Media, Right=Misc.
+// Up=Display Inputs; keep the legacy `game` storage key for existing layouts.
 export const SCREENS: Record<Exclude<ScreenId, 'home'>, ScreenDef> = {
 	game: {
-		id: 'game', label: 'Gaming', direction: 'up', orientation: 'vertical',
+		id: 'game', label: 'Display Inputs', direction: 'up', orientation: 'vertical',
 		accent: '#b39cff', panel: {x: '0%', y: '-100%'}, world: {x: '0%', y: '100%'},
 		nearEnd: true, anchor: 0.58   // enter from bottom → rest low, focus last
 	},

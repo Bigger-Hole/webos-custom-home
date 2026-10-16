@@ -6,7 +6,26 @@
 # blocked. Remove the init.d symlink (or uninstall the app) to disable. No OS files touched.
 SVCDIR=/media/developer/apps/usr/palm/services/tld.my.customhome.service
 [ -f "$SVCDIR/service.js" ] || exit 0
-[ -f /tmp/home-svc.pid ] && kill -9 "$(cat /tmp/home-svc.pid)" 2>/dev/null
+if [ -f /tmp/home-svc.pid ]; then
+  old_pid="$(cat /tmp/home-svc.pid)"
+  case "$old_pid" in
+    ''|*[!0-9]*) ;;
+    *)
+      old_cmd="$(tr '\000' ' ' < "/proc/$old_pid/cmdline" 2>/dev/null)"
+      case "$old_cmd" in
+        tld.my.customhome.service*)
+          kill -TERM "$old_pid" 2>/dev/null
+          attempts=0
+          while kill -0 "$old_pid" 2>/dev/null && [ "$attempts" -lt 20 ]; do
+            sleep 0.1
+            attempts=$((attempts + 1))
+          done
+          kill -0 "$old_pid" 2>/dev/null && kill -KILL "$old_pid" 2>/dev/null
+          ;;
+      esac
+      ;;
+  esac
+fi
 export NODE_PATH=/usr/lib/node_modules:/usr/lib/nodejs
 cd "$SVCDIR"
 # eARC EDITION ONLY (marker file present): re-elevate the service (idempotent) so it keeps the

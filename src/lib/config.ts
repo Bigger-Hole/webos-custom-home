@@ -21,7 +21,7 @@ export interface HomeConfig {
 	location: GeoLocation;
 }
 
-export const APP_VERSION = '0.3.0';
+export const APP_VERSION = '0.5.1';
 
 export const DEFAULT_CONFIG: HomeConfig = {
 	clock24: false,

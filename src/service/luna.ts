@@ -28,9 +28,11 @@ export function lunaCall<T = unknown> (service: string, method: string, params: 
 
 		const bridge = new Bridge();
 		let done = false;
+		let timer: ReturnType<typeof setTimeout>;
 		const finish = (fn: () => void) => {
 			if (done) return;
 			done = true;
+			clearTimeout(timer);
 			try { bridge.cancel?.(); } catch { /* noop */ }
 			fn();
 		};
@@ -48,10 +50,9 @@ export function lunaCall<T = unknown> (service: string, method: string, params: 
 			}
 		};
 
+		timer = setTimeout(() => finish(() => reject(new Error(`luna ${service}/${method} timeout`))), timeoutMs);
 		try { bridge.call(`luna://${service}/${method}`, JSON.stringify(params)); }
-		catch (e) { finish(() => reject(e as Error)); return; }
-
-		setTimeout(() => finish(() => reject(new Error(`luna ${service}/${method} timeout`))), timeoutMs);
+		catch (e) { finish(() => reject(e as Error)); }
 	});
 }
 

@@ -1,5 +1,10 @@
 # Tutorial: From a stock LG TV to a custom Home
 
+> **Archived upstream tutorial:** the root/Developer Mode steps, repository,
+> installers and fixed-app configuration below describe the original version.
+> They are not this fork’s installation instructions. For an already rooted TV,
+> follow [INSTALL.md](INSTALL.md); keep Developer Mode uninstalled on rooted TVs.
+
 This walks you all the way from an untouched LG webOS TV to booting straight into
 your own home screen. Budget an hour the first time. Nothing here writes to
 protected OS partitions — every step is reversible, and a full uninstall returns

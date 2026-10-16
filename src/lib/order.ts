@@ -1,76 +1,84 @@
-import {APPS, type AppItem} from './apps';
-import type {ScreenId} from './screens';
+import {APPS, type AppItem} from './apps.ts';
+import type {ScreenId} from './screens.ts';
 
 export type CatId = Exclude<ScreenId, 'home'>;
 export const CATS: CatId[] = ['game', 'stream', 'media', 'misc'];
-
-// Persisted layout state (QOL): per-category tile order — which may now contain
-// ids MOVED IN from other categories — plus a hidden-app list. The catalog in
-// apps.ts (+ apps discovered live from the TV) stays the source of truth for
-// what exists: removed apps drop out, brand-new ones append to their default
-// category, so nothing here ever needs a code edit.
 const ORDER_KEY = 'home-app-order-v1';
 const HIDDEN_KEY = 'home-hidden-v1';
+const SETTINGS = APPS.misc.find(a => a.id === 'internal.settings')!;
+type Orders = Partial<Record<CatId, string[]>>;
 
-function loadOrders (): Partial<Record<CatId, string[]>> {
-	try { return JSON.parse(localStorage.getItem(ORDER_KEY) || '{}'); }
-	catch { return {}; }
+function loadOrders (): Orders {
+	try {
+		const raw = JSON.parse(localStorage.getItem(ORDER_KEY) || '{}');
+		const out: Orders = {};
+		for (const cat of CATS) {
+			if (Array.isArray(raw?.[cat])) out[cat] = raw[cat].filter((id: unknown) => typeof id === 'string');
+		}
+		return out;
+	} catch { return {}; }
 }
 
-/**
- * Assemble the full per-category lists (hidden apps INCLUDED — the caller
- * filters for display). `discovered` are launch points read off the TV that
- * aren't in the curated catalog; they default to Misc.
- */
+function categoryFor (app: AppItem): CatId {
+	if (app.launchType === 'input') return 'game';
+	if (app.launchType === 'internal') return 'misc';
+	if (app.category && app.category !== 'game') return app.category;
+	return CATS.find(cat => cat !== 'game' && APPS[cat].some(hint => hint.id === app.id)) ?? 'misc';
+}
+
+/** Discovery is authoritative; saved preferences arrange only items still present. */
 export function buildLists (discovered: AppItem[] = []): Record<CatId, AppItem[]> {
-	const byId = new Map<string, AppItem>();
-	const defaultCat = new Map<string, CatId>();
-	for (const cat of CATS) {
-		for (const app of APPS[cat]) { byId.set(app.id, app); defaultCat.set(app.id, cat); }
-	}
-	for (const app of discovered) {
-		if (!byId.has(app.id)) { byId.set(app.id, app); defaultCat.set(app.id, 'misc'); }
-	}
-
-	const saved = loadOrders();
+	const byId = new Map(discovered.filter(a => a.id !== 'tld.my.customhome').map(a => [a.id, a]));
+	byId.set(SETTINGS.id, SETTINGS);
+	const out: Record<CatId, AppItem[]> = {game: [], stream: [], media: [], misc: []};
 	const claimed = new Set<string>();
-	const out = {game: [], stream: [], media: [], misc: []} as Record<CatId, AppItem[]>;
-
-	// saved orders claim first (they may hold ids moved across categories)
+	const saved = loadOrders();
 	for (const cat of CATS) {
 		for (const id of saved[cat] || []) {
 			const app = byId.get(id);
-			if (app && !claimed.has(id)) { out[cat].push(app); claimed.add(id); }
+			if (!app || claimed.has(id)) continue;
+			// Inputs stay in Display Inputs; old Gaming app placements migrate back.
+			if ((cat === 'game') !== (app.launchType === 'input')) continue;
+			if (app.launchType === 'internal' && cat !== 'misc') continue;
+			out[cat].push(app);
+			claimed.add(id);
 		}
 	}
-	// everything unclaimed appends to its default category, catalog order
-	for (const [id, app] of byId) {
-		if (!claimed.has(id)) out[defaultCat.get(id)!].push(app);
+	for (const app of byId.values()) {
+		if (!claimed.has(app.id)) out[categoryFor(app)].push(app);
 	}
 	return out;
 }
 
-/** Persist the given categories' current id sequences (merge into stored). */
+/** Keep absent IDs in their previous slots so reinstalling restores preferences. */
 export function saveOrders (lists: Partial<Record<CatId, AppItem[]>>): void {
 	const all = loadOrders();
+	const present = new Set(Object.values(lists).flatMap(apps => apps.map(a => a.id)));
 	for (const cat of CATS) {
 		const apps = lists[cat];
-		if (apps) all[cat] = apps.map((a) => a.id);
+		if (!apps) continue;
+		const pending = apps.map(a => a.id);
+		const merged: string[] = [];
+		for (const id of all[cat] || []) {
+			if (!present.has(id)) merged.push(id);
+			else if (pending.length) merged.push(pending.shift()!);
+		}
+		all[cat] = [...new Set([...merged, ...pending])];
 	}
-	try { localStorage.setItem(ORDER_KEY, JSON.stringify(all)); } catch { /* storage full/blocked — order just won't persist */ }
+	try { localStorage.setItem(ORDER_KEY, JSON.stringify(all)); } catch { /* best effort */ }
 }
 
 export function resetOrder (): void {
-	try { localStorage.removeItem(ORDER_KEY); } catch { /* noop */ }
+	try { localStorage.removeItem(ORDER_KEY); } catch { /* best effort */ }
 }
 
-// --- hidden apps -----------------------------------------------------------
-
 export function loadHidden (): Set<string> {
-	try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]')); }
-	catch { return new Set(); }
+	try {
+		const raw = JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]');
+		return new Set(Array.isArray(raw) ? raw.filter(id => typeof id === 'string' && id !== SETTINGS.id) : []);
+	} catch { return new Set(); }
 }
 
 export function saveHidden (ids: Set<string>): void {
-	try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...ids])); } catch { /* noop */ }
+	try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...ids].filter(id => id !== SETTINGS.id))); } catch { /* best effort */ }
 }

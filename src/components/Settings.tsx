@@ -1,9 +1,11 @@
-import {useEffect, useRef, useState, type RefObject} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState, type RefObject} from 'react';
 import {APP_VERSION, type HomeConfig} from '../lib/config';
 import {resetOrder, CATS, type CatId} from '../lib/order';
 import {SCREENS} from '../lib/screens';
 import type {AppItem} from '../lib/apps';
 import {searchCity, type GeoResult} from '../service/weather';
+import {canUninstall} from '../service/manage';
+import UninstallDialog from './UninstallDialog';
 
 // Remote-driven settings overlay (QOL config GUI). Up/Down picks a row,
 // Left/Right cycles its value (saved immediately by App), OK fires actions,
@@ -13,7 +15,7 @@ const ACCENT = '#7ca8ff';
 
 type Row =
 	| {kind: 'choice'; label: string; values: string[]; labels: string[]; get: (c: HomeConfig) => string; set: (c: HomeConfig, v: string) => HomeConfig}
-	| {kind: 'action'; label: string; hint: string; action: 'reset' | 'apps'}
+	| {kind: 'action'; label: string; hint: string; action: 'reset' | 'apps' | 'rescan'}
 	| {kind: 'location'; label: string}
 	| {kind: 'info'; label: string; value: string};
 
@@ -44,6 +46,7 @@ const ROWS: Row[] = [
 		get: (c) => c.bgSpeed, set: (c, v) => ({...c, bgSpeed: v as HomeConfig['bgSpeed']})
 	},
 	{kind: 'action', label: 'Manage apps', hint: 'OK to open', action: 'apps'},
+	{kind: 'action', label: 'Rescan apps and inputs', hint: 'OK to scan', action: 'rescan'},
 	{kind: 'action', label: 'Reset app order', hint: 'OK to reset', action: 'reset'},
 	{kind: 'info', label: 'Version', value: `v${APP_VERSION}`}
 ];
@@ -53,7 +56,10 @@ const APPS_ROW = ROWS.findIndex((r) => r.kind === 'action' && r.action === 'apps
 
 // Manage-apps pane: every app across all categories; OK (handled by the parent
 // key handler) toggles shown/hidden.
-function AppsPane ({lists, hidden, row}: {lists: Record<CatId, AppItem[]>; hidden: Set<string>; row: number}) {
+function AppsPane ({lists, hidden, row, action, onToggleHide, onUninstall}: {
+	lists: Record<CatId, AppItem[]>; hidden: Set<string>; row: number; action: 'visibility' | 'uninstall';
+	onToggleHide: (id: string) => void; onUninstall: (app: AppItem) => void;
+}) {
 	const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
 	useEffect(() => { rowRefs.current[row]?.scrollIntoView({block: 'nearest'}); }, [row]);
 
@@ -80,12 +86,15 @@ function AppsPane ({lists, hidden, row}: {lists: Record<CatId, AppItem[]>; hidde
 									border: `1px solid ${focused ? `${ACCENT}66` : 'transparent'}`
 								}}
 							>
-								<span className="text-lg font-medium" style={{color: isHidden ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.92)'}}>
+								<span className="min-w-0 truncate pr-3 text-lg font-medium" style={{color: isHidden ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.92)'}}>
 									{app.title}
 								</span>
-								<span className="text-base font-medium" style={{color: isHidden ? 'rgba(255,255,255,0.4)' : '#7ee7a6'}}>
+								<div className="flex shrink-0 items-center gap-2">
+								<button aria-label={`${isHidden ? 'Show' : 'Hide'} ${app.title}`} onClick={() => onToggleHide(app.id)} className="rounded-lg border px-2 py-1 text-base font-medium" style={{color: isHidden ? 'rgba(255,255,255,0.6)' : '#7ee7a6', borderColor: focused && action === 'visibility' ? ACCENT : 'transparent'}}>
 									{isHidden ? 'Hidden' : 'Shown'}
-								</span>
+								</button>
+								{canUninstall(app) && <button aria-label={`Uninstall ${app.title}`} onClick={() => onUninstall(app)} className="rounded-lg border px-2 py-1 text-base font-medium text-rose-300" style={{borderColor: focused && action === 'uninstall' ? '#fb7185' : 'transparent'}}>Uninstall</button>}
+								</div>
 							</div>
 						);
 					})}
@@ -149,7 +158,7 @@ function LocationPane ({inputRef, query, setQuery, results, searching, mode, res
 	);
 }
 
-export default function Settings ({config, onChange, onClose, onOrderReset, lists, hidden, onToggleHide}: {
+export default function Settings ({config, onChange, onClose, onOrderReset, lists, hidden, onToggleHide, onRescan, scanning, scanErrors, onUninstall}: {
 	config: HomeConfig;
 	onChange: (c: HomeConfig) => void;
 	onClose: () => void;
@@ -157,10 +166,17 @@ export default function Settings ({config, onChange, onClose, onOrderReset, list
 	lists: Record<CatId, AppItem[]>;
 	hidden: Set<string>;
 	onToggleHide: (id: string) => void;
+	onRescan: () => Promise<void>;
+	scanning: {apps: boolean; inputs: boolean};
+	scanErrors: Partial<Record<'apps' | 'inputs', string>>;
+	onUninstall: (app: AppItem) => Promise<void>;
 }) {
 	const [pane, setPane] = useState<'main' | 'apps' | 'location'>('main');
 	const [row, setRow] = useState(0);
 	const [resetDone, setResetDone] = useState(false);
+	const [appAction, setAppAction] = useState<'visibility' | 'uninstall'>('visibility');
+	const [pendingUninstall, setPendingUninstall] = useState<AppItem | null>(null);
+	const closeUninstall = useCallback(() => setPendingUninstall(null), []);
 
 	// location-pane state
 	const [query, setQuery] = useState('');
@@ -169,16 +185,27 @@ export default function Settings ({config, onChange, onClose, onOrderReset, list
 	const [locMode, setLocMode] = useState<'type' | 'pick'>('type');
 	const [resultRow, setResultRow] = useState(0);
 	const inputRef = useRef<HTMLInputElement>(null);
+	const mainRowRefs = useRef<(HTMLDivElement | null)[]>([]);
 
 	// internal tiles (this settings screen) can't be hidden — you'd be locked out
-	const manageable = {
+	const manageable = useMemo(() => ({
 		game: lists.game.filter((a) => a.launchType !== 'internal'),
 		stream: lists.stream.filter((a) => a.launchType !== 'internal'),
 		media: lists.media.filter((a) => a.launchType !== 'internal'),
 		misc: lists.misc.filter((a) => a.launchType !== 'internal')
-	};
-	const flatApps = CATS.flatMap((cat) => manageable[cat]);
+	}), [lists]);
+	const flatApps = useMemo(() => CATS.flatMap((cat) => manageable[cat]), [manageable]);
 	const rowCount = pane === 'main' ? ROWS.length : flatApps.length;
+	const previousApps = useRef(flatApps);
+	useEffect(() => {
+		if (pane === 'apps') {
+			const id = previousApps.current[row]?.id;
+			const next = flatApps.findIndex(app => app.id === id);
+			setRow(next >= 0 ? next : Math.max(0, Math.min(row, flatApps.length - 1)));
+		}
+		previousApps.current = flatApps;
+	}, [flatApps, pane]);
+	useEffect(() => { if (pane === 'main') mainRowRefs.current[row]?.scrollIntoView({block: 'nearest'}); }, [row, pane]);
 
 	const openLocation = () => { setPane('location'); setLocMode('type'); setQuery(''); setResults([]); setResultRow(0); };
 	const closeLocation = () => { setPane('main'); setRow(LOCATION_ROW); setQuery(''); setResults([]); setLocMode('type'); };
@@ -205,6 +232,7 @@ export default function Settings ({config, onChange, onClose, onOrderReset, list
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
+			if (pendingUninstall) return; // The confirmation dialog owns the keys.
 			const typing = pane === 'location' && locMode === 'type';
 			// While typing, Backspace edits text — don't treat it as Back.
 			const isBack = e.keyCode === 461 || e.key === 'GoBack' || e.key === 'Escape'
@@ -248,21 +276,27 @@ export default function Settings ({config, onChange, onClose, onOrderReset, list
 				else onClose();
 				return;
 			}
-			if (e.key === 'ArrowUp') { setRow((r) => Math.max(0, r - 1)); return; }
-			if (e.key === 'ArrowDown') { setRow((r) => Math.min(rowCount - 1, r + 1)); return; }
+			if (e.key === 'ArrowUp') { setAppAction('visibility'); setRow((r) => Math.max(0, r - 1)); return; }
+			if (e.key === 'ArrowDown') { setAppAction('visibility'); setRow((r) => Math.max(0, Math.min(rowCount - 1, r + 1))); return; }
 			if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Enter') return;
 
 			if (pane === 'apps') {
 				const app = flatApps[row];
-				if (app && e.key === 'Enter') onToggleHide(app.id);
+				if (!app) return;
+				if (e.key === 'ArrowLeft') setAppAction('visibility');
+				else if (e.key === 'ArrowRight') setAppAction(canUninstall(app) ? 'uninstall' : 'visibility');
+				else if (appAction === 'uninstall') { if (canUninstall(app)) setPendingUninstall(app); }
+				else onToggleHide(app.id);
 				return;
 			}
 			const def = ROWS[row];
+			if (!def) return;
 			if (def.kind === 'info') return;
 			if (def.kind === 'location') { if (e.key === 'Enter') openLocation(); return; }
 			if (def.kind === 'action') {
 				if (e.key !== 'Enter') return;
 				if (def.action === 'reset') { resetOrder(); onOrderReset(); setResetDone(true); }
+				else if (def.action === 'rescan') { void onRescan(); }
 				else { setPane('apps'); setRow(0); }
 				return;
 			}
@@ -274,34 +308,35 @@ export default function Settings ({config, onChange, onClose, onOrderReset, list
 		// capture phase so the app-wide nav handler never sees these keys
 		window.addEventListener('keydown', onKey, true);
 		return () => window.removeEventListener('keydown', onKey, true);
-	}, [pane, row, rowCount, config, onChange, onClose, onOrderReset, flatApps, onToggleHide, locMode, results, resultRow]);
+	}, [pane, row, rowCount, config, onChange, onClose, onOrderReset, flatApps, onToggleHide, locMode, results, resultRow, onRescan, appAction, pendingUninstall]);
 
 	const title = pane === 'main' ? 'Settings' : pane === 'apps' ? 'Manage apps' : 'Set location';
 	const hint = pane === 'apps'
-		? '↑↓ select · OK show/hide · Back to settings'
+		? '↑↓ select · ←→ action · OK select · Back to settings'
 		: pane === 'location'
 			? (locMode === 'type' ? 'Type a city · ↓ to results · Back to settings' : '↑↓ pick · OK select · Back to edit')
 			: '↑↓ select · ‹ › change · OK open · Back to close';
 
 	return (
 		<div className="absolute inset-0 z-30 flex items-center justify-center" style={{background: 'rgba(0,0,0,0.72)'}}>
-			<div className="m3-card w-[720px] px-10 py-8" style={{animation: 'rise-in 0.35s var(--m3-ease-emphasized) both'}}>
+			<div role="dialog" aria-label={title} className="m3-card max-h-[90vh] w-[720px] px-10 py-8" style={{animation: 'rise-in 0.35s var(--m3-ease-emphasized) both'}}>
 				<h2 className="mb-6 text-[34px] font-normal tracking-tight" style={{color: ACCENT}}>{title}</h2>
 
 				{pane === 'apps' ? (
-					<AppsPane lists={manageable} hidden={hidden} row={row} />
+					<AppsPane lists={manageable} hidden={hidden} row={row} action={appAction} onToggleHide={onToggleHide} onUninstall={setPendingUninstall} />
 				) : pane === 'location' ? (
 					<LocationPane
 						inputRef={inputRef} query={query} setQuery={setQuery} results={results}
 						searching={searching} mode={locMode} resultRow={resultRow} currentName={config.location.name}
 					/>
 				) : (
-					<div className="flex flex-col gap-2">
+					<div className="flex max-h-[62vh] flex-col gap-2 overflow-y-auto">
 						{ROWS.map((def, i) => {
 							const focused = i === row;
 							return (
 								<div
 									key={def.label}
+									ref={el => { mainRowRefs.current[i] = el; }}
 									className="flex items-center justify-between rounded-2xl px-6 py-4"
 									style={{
 										background: focused ? `${ACCENT}1f` : 'transparent',
@@ -325,7 +360,7 @@ export default function Settings ({config, onChange, onClose, onOrderReset, list
 										<span className="text-lg font-medium text-white/40">{def.value}</span>
 									) : (
 										<span className="text-lg font-medium" style={{color: focused ? ACCENT : 'rgba(255,255,255,0.55)'}}>
-											{def.action === 'reset' && resetDone ? 'Done ✓' : def.hint}
+											{def.action === 'reset' && resetDone ? 'Done ✓' : def.action === 'rescan' && (scanning.apps || scanning.inputs) ? 'Scanning…' : def.hint}
 										</span>
 									)}
 								</div>
@@ -333,9 +368,16 @@ export default function Settings ({config, onChange, onClose, onOrderReset, list
 						})}
 					</div>
 				)}
+				{pane === 'main' && (scanErrors.apps || scanErrors.inputs) && (
+					<p role="status" className="mt-3 text-base text-amber-200/90">
+						{scanErrors.apps && <span className="block">Apps: {scanErrors.apps}</span>}
+						{scanErrors.inputs && <span className="block">Inputs: {scanErrors.inputs}</span>}
+					</p>
+				)}
 
 				<p className="mt-6 text-center text-base text-white/40">{hint}</p>
 			</div>
+			{pendingUninstall && <UninstallDialog app={pendingUninstall} onUninstall={onUninstall} onClose={closeUninstall} />}
 		</div>
 	);
 }

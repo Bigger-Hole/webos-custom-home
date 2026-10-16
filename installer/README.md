@@ -1,5 +1,9 @@
 # One-click installer
 
+> **Upstream reference:** these installers download zzeppieri’s v0.4.2 release,
+> not this fork’s adaptive menus. For the fork, follow
+> [docs/INSTALL.md](../docs/INSTALL.md).
+
 The lazy way to get **webOS Custom Home** onto a rooted LG TV — no building, no
 Node, no `ares` CLI. You only need the TV's IP address.
 

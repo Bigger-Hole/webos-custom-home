@@ -1,6 +1,7 @@
 import {useState, memo} from 'react';
 import type {ScreenDef} from '../lib/screens';
 import type {AppItem} from '../lib/apps';
+import {inputStatus} from '../lib/discovery';
 
 // PERF: no per-tile motion components and NO filter:blur layers (blur is the most
 // expensive thing this TV GPU does — 24 of them tanked the framerate). The track is
@@ -16,8 +17,8 @@ const EASE = 'var(--m3-dur-medium) var(--m3-ease-emphasized)';
 // Real app icon (file:// on the TV) with a monogram fallback if it's missing or
 // off-device. The tonal chip behind it carries the brand color either way.
 function AppArt ({app, size}: {app: AppItem; size: number}) {
-	const [broken, setBroken] = useState(false);
-	const show = app.icon && !broken;
+	const [broken, setBroken] = useState<string | undefined>();
+	const show = app.icon && broken !== app.icon;
 	return (
 		<div
 			className="flex shrink-0 items-center justify-center overflow-hidden"
@@ -28,7 +29,7 @@ function AppArt ({app, size}: {app: AppItem; size: number}) {
 					src={app.icon}
 					alt=""
 					draggable={false}
-					onError={() => setBroken(true)}
+					onError={() => setBroken(app.icon)}
 					style={{width: '100%', height: '100%', objectFit: 'cover'}}
 				/>
 			) : (
@@ -42,7 +43,7 @@ function AppArt ({app, size}: {app: AppItem; size: number}) {
 const Tile = memo(function Tile ({app, focused, vertical, tileClass, moving, launching}: {app: AppItem; focused: boolean; vertical: boolean; tileClass: string; moving: boolean; launching: boolean}) {
 	const held = focused && moving;   // this tile is being reordered
 	return (
-		<div className={`relative shrink-0 ${tileClass}`}>
+		<div data-app-id={app.id} data-focused={focused} className={`relative shrink-0 ${tileClass}`}>
 			<div
 				className={`absolute inset-0 flex items-center overflow-hidden rounded-[28px] ${vertical ? 'flex-row px-6' : 'flex-col p-6'}`}
 				style={{
@@ -63,7 +64,10 @@ const Tile = memo(function Tile ({app, focused, vertical, tileClass, moving, lau
 				{vertical ? (
 					<>
 						<AppArt app={app} size={56} />
-						<span className="ml-5 truncate text-2xl font-medium text-white/95">{app.title}</span>
+						<div className="ml-5 min-w-0">
+							<div className="truncate text-2xl font-medium text-white/95">{app.title}</div>
+							{app.input && <div className="mt-1 truncate text-base text-white/60">{inputStatus(app)}</div>}
+						</div>
 					</>
 				) : (
 					<>
@@ -78,13 +82,13 @@ const Tile = memo(function Tile ({app, focused, vertical, tileClass, moving, lau
 	);
 });
 
-export default function AltScreen ({def, items, selected, active, moving, launchingId}: {def: ScreenDef; items: AppItem[]; selected: number; active: boolean; moving: boolean; launchingId: string | null}) {
+export default function AltScreen ({def, items, selected, active, moving, launchingId, emptyMessage}: {def: ScreenDef; items: AppItem[]; selected: number; active: boolean; moving: boolean; launchingId: string | null; emptyMessage: string}) {
 	const vertical = def.orientation === 'vertical';
 	const g = vertical ? V : H;
 
 	// Inactive panels rest at their own entry index so becoming active never
 	// triggers a stray scroll (#2: entry starts on the near-edge app).
-	const idx = active ? selected : (def.nearEnd ? items.length - 1 : 0);
+	const idx = active ? selected : (def.nearEnd ? Math.max(0, items.length - 1) : 0);
 
 	// Anchor the focused tile near the entry edge (lean, not dead-center).
 	const axisPct = def.anchor * 100;
@@ -94,10 +98,11 @@ export default function AltScreen ({def, items, selected, active, moving, launch
 		: `translate3d(calc(${axisPct}vw - ${scrollPx}px), -50%, 0)`;
 
 	return (
-		<div className="relative h-full w-full">
+		<div role="region" aria-label={def.label} aria-hidden={!active} className="relative h-full w-full">
 			<h1 className="absolute left-[5vw] top-[8vh] z-10 text-[42px] font-normal tracking-tight" style={{color: def.accent}}>
 				{def.label}
 			</h1>
+			{items.length === 0 && <p className="absolute left-1/2 top-1/2 w-[560px] -translate-x-1/2 -translate-y-1/2 text-center text-2xl text-white/60">{emptyMessage}</p>}
 
 			{/* Reorder hint — shown while a tile is held; hold OK on a tile to start. */}
 			<div
@@ -111,7 +116,7 @@ export default function AltScreen ({def, items, selected, active, moving, launch
 					pointerEvents: 'none'
 				}}
 			>
-				Moving “{items[selected]?.title}” — {vertical ? '↑ ↓ reorder · ← Media  → Misc' : '← → reorder · ↑ Gaming  ↓ Streaming'} · OK save · Back cancel
+				Moving “{items[selected]?.title}” — {def.id === 'game' ? '↑ ↓ reorder' : vertical ? '↑ ↓ reorder · ← Media  → Misc' : '← → reorder · ↓ Streaming'} · OK save · Back cancel
 			</div>
 
 			<div

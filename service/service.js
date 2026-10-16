@@ -28,6 +28,16 @@ log('start pid=' + process.pid + ' args=[' + ARGS.join(' ') + ']');
 
 service.register('status', function (m) { m.respond({ returnValue: true, running: true, pid: process.pid }); });
 
+var discovery = require('./discovery').createDiscovery();
+[['discoverApps', 'apps'], ['discoverInputs', 'inputs']].forEach(function (entry) {
+	service.register(entry[0], function (m) {
+		discovery[entry[1]]().then(function (data) { m.respond(data); }).catch(function (error) {
+			log(entry[0] + ': ' + error.message);
+			m.respond({returnValue: false, errorText: 'Unable to scan ' + entry[1] + '. Check the rooted launcher service.'});
+		});
+	});
+});
+
 function launchId(id, reason) {
 	service.call('luna://com.webos.applicationManager/launch', { id: id }, function (m) {
 		log('launch ' + id + ' (' + reason + '): ' + JSON.stringify(m && m.payload));
@@ -149,7 +159,16 @@ if (ARGS.indexOf('--boot') !== -1) {
 	// Cold-boot eARC re-handshake (eARC edition only), after the panel/AVR link has settled.
 	if (EARC_ENABLED) { setTimeout(function () { recoverEarc('boot'); }, 10000); }
 }
-if (ARGS.indexOf('--watch') !== -1) { watchAll(); }
+if (ARGS.indexOf('--watch') !== -1) {
+	watchAll();
+	var stopForeground = require('./foreground').watchForeground({
+		onHome: function () { launchApp('lg-home-fallback'); }, log: log
+	});
+	function shutdown() { stopForeground(); process.exit(0); }
+	process.once('SIGTERM', shutdown);
+	process.once('SIGINT', shutdown);
+	process.once('exit', stopForeground);
+}
 
 // Wake-from-standby relaunch. webosbrew init.d autostart only runs on COLD boot, not on
 // standby-resume ("rest"). But this process is merely FROZEN during rest, so a 1s heartbeat

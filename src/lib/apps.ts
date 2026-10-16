@@ -1,28 +1,27 @@
 import type {ScreenId} from './screens';
 
+export type AppCategory = Exclude<ScreenId, 'home'>;
+
 export interface AppItem {
 	id: string;         // webOS appId — used for the real luna launch
 	title: string;
 	color: string;      // brand accent — tints the tile + dynamic background
-	/** icon bundled into the app (public/icons/*). WAM sandboxes web apps to their own
-	 *  dir, so cross-app icon paths are blocked — we ship copies pulled off the TV.
-	 *  Monogram fallback if it ever fails to load. */
+	/** Bundled fallback or a raster data URI supplied by the discovery service. */
 	icon?: string;
 	/** 'internal' opens one of OUR screens (no luna launch) — e.g. the settings overlay */
 	launchType?: 'app' | 'input' | 'internal';
+	category?: AppCategory;
+	removable?: boolean;
+	input?: {port: number; connected?: boolean; signal?: boolean; stale?: boolean; labelReported?: boolean; portCount?: number};
 }
 
-// Curated from THIS TV's real installed apps (appinfo.json). IDs are live and launch is
-// real (App.tsx → launchApp, permission confirmed on-device). Icons are the apps' real
-// artwork, copied off the TV into public/icons/ at build time (see scripts / README).
+// Classification/artwork hints only: these never create tiles for absent apps.
+// The legacy `game` key is retained to preserve existing saved input orders.
 export const APPS: Record<Exclude<ScreenId, 'home'>, AppItem[]> = {
-	// Up — consoles on HDMI inputs (launching the input app switches the TV to it).
-	game: [
-		{id: 'com.webos.app.hdmi2', title: 'PS5', color: '#2f6cf6', launchType: 'input'},
-		{id: 'com.webos.app.hdmi1', title: 'Switch', color: '#e60012', launchType: 'input'}
-	],
-	// Down — streaming services actually installed on the TV.
+	game: [],
+	// Down — streaming services, if installed.
 	stream: [
+		{id: 'io.strem.tv', title: 'Stremio', color: '#8e5eff', icon: 'icons/stremio.png'},
 		{id: 'netflix', title: 'Netflix', color: '#e50914', icon: 'icons/netflix.png'},
 		{id: 'com.disney.disneyplus-prod', title: 'Disney+', color: '#1f6feb', icon: 'icons/disney.png'},
 		{id: 'amazon', title: 'Prime Video', color: '#00a8e1', icon: 'icons/prime.png'},
